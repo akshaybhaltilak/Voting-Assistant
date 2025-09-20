@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import ChatWindow from './components/ChatWindow';
-import AdminPage from './components/AdminPage';
+// import AdminPage from './components/AdminPage';
 import { db } from './firebase';
 import EnhancedNav from './components/EnhancedNav'; // Import the new component
 
