@@ -1,4 +1,6 @@
 import React, { useState, useRef, useEffect } from "react";
+import jsPDF from "jspdf";
+import html2canvas from "html2canvas";
 import { collection, query, where, getDocs } from "firebase/firestore";
 import { Send, User, Bot, Loader2, Download, CheckCircle, MapPin, Phone, Hash } from "lucide-react";
 
@@ -55,7 +57,9 @@ const ChatWindow = ({ db }) => {
     'la': ['ल', 'ला', 'ल्'],
     'va': ['व', 'वा', 'व्'],
     'wa': ['व', 'वा', 'व्'],
-    'sha': ['श', 'शा', 'श्', 'ष', 'षा', 'ष्'],
+  'sha': ['श', 'शा', 'श्', 'ष', 'षा', 'ष्'],
+  'sh': ['श', 'ष'],
+  'shekh': ['शेख'],
     'sa': ['स', 'सा', 'स्'],
     'ha': ['ह', 'हा', 'ह्'],
     'ksha': ['क्ष', 'क्षा'],
@@ -66,9 +70,10 @@ const ChatWindow = ({ db }) => {
   // Create phonetic variations of English input
   const createPhoneticVariations = (englishName) => {
     const variations = [englishName.toLowerCase()];
-    
-    // Common phonetic mappings for names
+
+    // Hardcoded popular name mappings (keep for accuracy)
     const nameVariations = {
+      'shekh': ['शेख'],
       'rahul': ['राहुल', 'राहूल'],
       'amit': ['अमित', 'अमीत'],
       'anjali': ['अंजली', 'अञ्जली'],
@@ -107,24 +112,86 @@ const ChatWindow = ({ db }) => {
       variations.push(...nameVariations[lowerName]);
     }
 
+    // Systematic phonetic mapping for any name
+    // Break the name into possible syllables and map each using phoneticMap
+    // This is a simple greedy approach, not perfect but much better than nothing
+    function getPhoneticCombos(name) {
+      let combos = [''];
+      let i = 0;
+      while (i < name.length) {
+        let found = false;
+        // Try to match the longest possible key in phoneticMap (up to 4 chars)
+        for (let len = 4; len > 0; len--) {
+          if (i + len <= name.length) {
+            const chunk = name.slice(i, i + len);
+            if (phoneticMap[chunk]) {
+              // Expand combos with all possible phonetic options for this chunk
+              const newCombos = [];
+              for (const c of combos) {
+                for (const m of phoneticMap[chunk]) {
+                  newCombos.push(c + m);
+                }
+              }
+              combos = newCombos;
+              i += len;
+              found = true;
+              break;
+            }
+          }
+        }
+        if (!found) {
+          // If no mapping, just add the character as is
+          combos = combos.map(c => c + name[i]);
+          i++;
+        }
+      }
+      return combos;
+    }
+
+    // Add systematic phonetic combos for the name
+    const phoneticCombos = getPhoneticCombos(lowerName);
+    for (const combo of phoneticCombos) {
+      if (!variations.includes(combo)) {
+        variations.push(combo);
+      }
+    }
+
     return variations;
   };
 
-  // Download receipt function
-  const downloadReceipt = (voterData) => {
-    const receiptContent = `
-VOTER INFORMATION RECEIPT
-========================
+  // Download receipt as PDF
+  const downloadReceiptPDF = async (voterData) => {
+    const receiptDiv = document.getElementById(`receipt-${voterData.VoterId}`);
+    if (!receiptDiv) return;
+    const canvas = await html2canvas(receiptDiv, { scale: 2 });
+    const imgData = canvas.toDataURL("image/png");
+    const pdf = new jsPDF({ orientation: "portrait", unit: "pt", format: "a4" });
+    const pageWidth = pdf.internal.pageSize.getWidth();
+    const pageHeight = pdf.internal.pageSize.getHeight();
+    const imgProps = pdf.getImageProperties(imgData);
+    const pdfWidth = pageWidth - 40;
+    const pdfHeight = (imgProps.height * pdfWidth) / imgProps.width;
+    pdf.addImage(imgData, "PNG", 20, 20, pdfWidth, pdfHeight);
+    pdf.save(`voter-receipt-${voterData.VoterId}.pdf`);
+  };
 
-Name: ${voterData.Name}
-Voter ID: ${voterData.VoterId}
-Sex/Age: ${voterData.Sex || "N/A"}
-Mobile: ${voterData.Mobile || "N/A"}
+  // Download receipt as Image
+  const downloadReceiptImage = async (voterData) => {
+    const receiptDiv = document.getElementById(`receipt-${voterData.VoterId}`);
+    if (!receiptDiv) return;
+    const canvas = await html2canvas(receiptDiv, { scale: 2 });
+    const imgData = canvas.toDataURL("image/png");
+    const a = document.createElement("a");
+    a.href = imgData;
+    a.download = `voter-receipt-${voterData.VoterId}.png`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  };
 
-Generated on: ${new Date().toLocaleString()}
-Source: Voting Assistant Portal
-    `;
-
+  // Download receipt as plain text (original)
+  const downloadReceiptText = (voterData) => {
+    const receiptContent = `VOTER INFORMATION RECEIPT\n========================\n\nName: ${voterData.Name}\nVoter ID: ${voterData.VoterId}\nSex/Age: ${voterData.Sex || "N/A"}\nMobile: ${voterData.Mobile || "N/A"}\n\nGenerated on: ${new Date().toLocaleString()}\nSource: Voting Assistant Portal`;
     const blob = new Blob([receiptContent], { type: 'text/plain' });
     const url = window.URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -371,13 +438,43 @@ Source: Voting Assistant Portal
                         </span>
                       </div>
                     </div>
-                    <button
-                      onClick={() => downloadReceipt(voter)}
-                      className="inline-flex items-center px-3 py-2 text-sm font-medium text-orange-600 bg-orange-50 border border-orange-200 rounded-lg hover:bg-orange-100 hover:border-orange-300 transition-colors duration-200"
-                    >
-                      <Download className="w-4 h-4 mr-1.5" />
-                      Download Receipt
-                    </button>
+                    <div className="flex flex-col gap-1">
+                      <button
+                        onClick={() => downloadReceiptPDF(voter)}
+                        className="inline-flex items-center px-3 py-2 text-sm font-medium text-orange-600 bg-orange-50 border border-orange-200 rounded-lg hover:bg-orange-100 hover:border-orange-300 transition-colors duration-200"
+                      >
+                        <Download className="w-4 h-4 mr-1.5" />
+                        PDF
+                      </button>
+                      <button
+                        onClick={() => downloadReceiptImage(voter)}
+                        className="inline-flex items-center px-3 py-2 text-sm font-medium text-blue-600 bg-blue-50 border border-blue-200 rounded-lg hover:bg-blue-100 hover:border-blue-300 transition-colors duration-200"
+                      >
+                        <Download className="w-4 h-4 mr-1.5" />
+                        Image
+                      </button>
+                      <button
+                        onClick={() => downloadReceiptText(voter)}
+                        className="inline-flex items-center px-3 py-2 text-sm font-medium text-green-600 bg-green-50 border border-green-200 rounded-lg hover:bg-green-100 hover:border-green-300 transition-colors duration-200"
+                      >
+                        <Download className="w-4 h-4 mr-1.5" />
+                        Text
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Hidden receipt for PDF/Image capture */}
+                  <div style={{ position: "absolute", left: "-9999px", top: 0 }}>
+                    <div id={`receipt-${voter.VoterId}`} style={{ width: 350, padding: 24, background: "#fff", color: "#222", border: "1px solid #eee", borderRadius: 8, fontFamily: 'sans-serif' }}>
+                      <h2 style={{ fontWeight: 700, fontSize: 20, marginBottom: 8 }}>VOTER INFORMATION RECEIPT</h2>
+                      <hr style={{ margin: '8px 0 16px 0' }} />
+                      <div><b>Name:</b> {voter.Name}</div>
+                      <div><b>Voter ID:</b> {voter.VoterId}</div>
+                      <div><b>Sex/Age:</b> {voter.Sex || "N/A"}</div>
+                      <div><b>Mobile:</b> {voter.Mobile || "N/A"}</div>
+                      <div style={{ marginTop: 16, fontSize: 12, color: '#666' }}>Generated on: {new Date().toLocaleString()}</div>
+                      <div style={{ fontSize: 12, color: '#666' }}>Source: Voting Assistant Portal</div>
+                    </div>
                   </div>
 
                   {/* Details Grid */}
